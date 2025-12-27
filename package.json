@@ -1,0 +1,17 @@
+{
+  "name": "qq-system",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node db/seed.js",
+    "test": "node test/smoke.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mysql2": "^3.3.0",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2"
+  }
+}

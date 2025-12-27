@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Display - QQ System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { height: 100%; margin:0; }
+    :root { --gap: 12px; }
+    body { background: #fff; color: #111827; font-family: Inter, system-ui, -apple-system, "Noto Sans Thai", sans-serif; }
+    .app { position: relative; height: 100vh; }
+    /* grid occupies full area and keeps 5x4 layout */
+    #grid { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(5, 1fr); gap: var(--gap); padding: var(--gap); box-sizing: border-box; }
+    .cell { display:flex; align-items:center; justify-content:center; border-radius:12px; background:#ffffff; border:1px solid #e5e7eb; box-shadow:0 2px 8px rgba(0,0,0,0.04); font-weight:800; color:#0f172a; user-select:none; }
+    .cell.called { background:#0f172a; color:#fff; }
+    .cell.cancel { opacity:0.45; text-decoration:line-through; }
+    .blink { animation: blink 1s steps(2, start) infinite; }
+    @keyframes blink { to { visibility: hidden; } }
+
+    /* small control hints in corner */
+    .hint { position: absolute; top: 8px; left: 12px; color:#374151; font-weight:600; background: rgba(255,255,255,0.85); padding:6px 10px; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div id="grid" aria-label="display grid"></div>
+    <div class="hint">หน้าจอแสดงผล - กระพริบ 10 วินาที</div>
+  </div>
+
+  <audio id="ding" src="/dingdong.mp3" preload="auto"></audio>
+
+  <script>
+    let items = [];
+    let lastCalledSet = new Set();
+
+    async function load() {
+      try {
+        const res = await fetch('/api/queue');
+        items = await res.json();
+        render();
+      } catch (err) { console.error('load failed', err); }
+    }
+
+    function render() {
+      const grid = document.getElementById('grid');
+      grid.innerHTML = '';
+      items.forEach(it => {
+        const el = document.createElement('div');
+        el.className = 'cell';
+        el.textContent = it.queue_no;
+        if (it.status === 'CALLED') {
+          el.classList.add('called');
+          if (!lastCalledSet.has(it.id)) {
+            el.classList.add('blink');
+            document.getElementById('ding').play().catch(()=>{});
+            setTimeout(()=> el.classList.remove('blink'), 10000);
+          }
+        }
+        if (it.status === 'CANCEL') el.classList.add('cancel');
+        grid.appendChild(el);
+      });
+
+      lastCalledSet = new Set(items.filter(x=>x.status==='CALLED').map(x=>x.id));
+      adjustGrid();
+    }
+
+    // compute cell size to exactly fit 5 rows x 4 cols inside grid area
+    function adjustGrid() {
+      const grid = document.getElementById('grid');
+      const gap = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap')) || 12;
+      const cols = 4, rows = 5;
+      const padLeft = parseFloat(getComputedStyle(grid).paddingLeft) || 0;
+      const padRight = parseFloat(getComputedStyle(grid).paddingRight) || 0;
+      const padTop = parseFloat(getComputedStyle(grid).paddingTop) || 0;
+      const padBottom = parseFloat(getComputedStyle(grid).paddingBottom) || 0;
+      const availableWidth = grid.clientWidth - padLeft - padRight - (cols - 1) * gap;
+      const availableHeight = grid.clientHeight - padTop - padBottom - (rows - 1) * gap;
+      const cellW = Math.max(28, Math.floor(availableWidth / cols));
+      const cellH = Math.max(28, Math.floor(availableHeight / rows));
+      // For option A (edge-to-edge), we stretch cells to fill the grid exactly.
+      document.querySelectorAll('.cell').forEach(c => {
+        c.style.width = cellW + 'px';
+        c.style.height = cellH + 'px';
+        // make font large and proportional to the smaller cell dimension
+        c.style.fontSize = Math.floor(Math.min(cellW, cellH) * 0.66) + 'px';
+        c.style.borderRadius = Math.max(6, Math.floor(Math.min(cellW, cellH) * 0.06)) + 'px';
+      });
+    }
+
+    load();
+    setInterval(load, 1500);
+    window.addEventListener('resize', adjustGrid);
+    window.addEventListener('orientationchange', adjustGrid);
+  </script>
+</body>
+</html>

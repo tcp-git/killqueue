@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Caller - QQ System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Layout: full viewport, grid 5x4 that scales to available space */
+    html, body { height: 100%; }
+    body { margin: 0; }
+    .app { position: relative; display: flex; flex-direction: column; height: 100vh; background: #ffffff; color: #111827; font-family: Inter, system-ui, -apple-system, "Noto Sans Thai", sans-serif; }
+    header { padding: 4px 8px; height: 44px; box-sizing: border-box; }
+    .main {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 0 8px 8px 8px;
+      box-sizing: border-box;
+      min-height: 0; /* allow flex children to shrink */
+    }
+    /* grid should occupy available space and keep square cells */
+    .grid-wrap {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: repeat(5, 1fr); /* ensure 5 rows to show all 20 cells */
+      gap: 8px;
+      align-items: stretch;
+      width: 100%;
+      flex: 1 1 auto;
+      min-height: 0; /* important for flexbox to prevent overflow */
+      overflow: hidden;
+      position: absolute;
+      top: 44px; /* below header */
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+    .cell {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #e5e7eb; /* gray-200 */
+      border-radius: 8px;
+      padding: 8px;
+      user-select: none;
+      cursor: pointer;
+      background: #ffffff;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+      font-weight: 800;
+      /* width/height/font-size will be set by JS per cell to allow edge-to-edge stretching */
+      width: var(--cell-w, 120px);
+      height: var(--cell-h, 120px);
+      font-size: calc(min(var(--cell-w, 120px), var(--cell-h, 120px)) * 0.56);
+      transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+    .cell:active { transform: scale(0.98); }
+    .cell.idle { border-color: #d1d5db; }
+    .cell.selected { outline: 3px solid #111827; outline-offset: 2px; }
+    .cell.called { background: #111827; color: #fff; }
+    .cell.cancel { opacity: 0.45; text-decoration: line-through; }
+
+    /* overlay controls that do not take vertical layout space */
+    .controls-overlay {
+      position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 20px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+      background: rgba(255,255,255,0.90);
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+      backdrop-filter: blur(4px);
+      z-index: 40;
+    }
+  .controls-overlay button { padding: 8px 12px; border-radius: 8px; border:1px solid #d1d5db; background:#fff; font-weight:600; font-size:14px }
+  .preview-mini { margin-left: 8px; color:#374151; font-weight:600; font-size:14px }
+
+    /* When viewport narrow, reduce grid to scrollable but keep cells visible */
+    @media (max-height: 600px) {
+      .grid-wrap { gap: 8px; }
+      .cell { font-size: clamp(14px, 3vw, 36px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1 class="text-2xl font-semibold">ตัวเรียกคิว (Caller)</h1>
+    </header>
+
+    <main class="main">
+      <div id="grid" class="grid-wrap" aria-label="grid of queue numbers"></div>
+
+      <!-- controls as overlay so they do not reduce grid area -->
+      <div class="controls-overlay" role="region" aria-label="controls">
+        <button id="btnPrev" aria-label="ก่อนหน้า">ก่อนหน้า</button>
+        <button id="btnCall">เรียก</button>
+        <button id="btnNext" aria-label="ถัดไป">ถัดไป</button>
+        <button id="btnCancel">ยกเลิก</button>
+        <button id="btnSkip">ข้าม</button>
+        <div id="preview" class="preview-mini" aria-live="polite"></div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+  let items = [];
+  let selected = new Set();
+  const COLS = 4, ROWS = 5;
+  let viewRowOffset = 0; // rows to shift the visible window (0 = show 001-020)
+    async function load() {
+      try {
+        const res = await fetch('/api/queue');
+        if (!res.ok) return;
+        items = await res.json();
+        render();
+      } catch (err) {
+        console.error('load failed', err);
+      }
+    }
+    function render() {
+      const grid = document.getElementById('grid');
+      grid.innerHTML = '';
+      // sort known items numerically
+      const ordered = items.slice().sort((a,b)=> parseInt(a.queue_no,10) - parseInt(b.queue_no,10));
+      const startIndex = viewRowOffset * COLS;
+      const totalCells = ROWS * COLS;
+
+      for (let i = 0; i < totalCells; i++) {
+        const idx = startIndex + i;
+        let it = ordered[idx];
+        if (!it) {
+          // synthesize a placeholder queue number for display only
+          const qnum = (idx + 1).toString().padStart(3, '0');
+          it = { id: null, queue_no: qnum, status: 'IDLE' };
+        }
+
+        const el = document.createElement('div');
+        el.className = 'cell';
+        if (!it.status || it.status === 'IDLE') el.classList.add('idle');
+        if (it.status === 'SELECTED') el.classList.add('selected');
+        if (it.status === 'CALLED') el.classList.add('called');
+        if (it.status === 'CANCEL') el.classList.add('cancel');
+
+        el.textContent = it.queue_no;
+        if (it.id) {
+          el.onclick = () => toggleSelect(it.id);
+          el.tabIndex = 0;
+          el.setAttribute('data-item-id', it.id);
+        } else {
+          el.classList.add('placeholder');
+        }
+
+        grid.appendChild(el);
+      }
+
+      renderPreview();
+      adjustGrid();
+    }
+    function toggleSelect(id) {
+      if (selected.has(id)) selected.delete(id); else selected.add(id);
+      render();
+    }
+    function renderPreview() {
+      const preview = document.getElementById('preview');
+      preview.innerHTML = '';
+      selected.forEach(id => {
+        const it = items.find(x => x.id === id);
+        const el = document.createElement('div');
+        el.className = 'badge';
+        el.textContent = it ? it.queue_no : id;
+        preview.appendChild(el);
+      });
+    }
+
+    // Move selection by delta: -1 previous, +1 next within full list (keeps single selection).
+    function moveSelection(delta) {
+      if (!items || items.length === 0) return;
+      const ordered = items.slice().sort((a,b)=> parseInt(a.queue_no,10) - parseInt(b.queue_no,10));
+      let currentIndex = -1;
+      if (selected.size > 0) {
+        const firstId = Array.from(selected)[0];
+        currentIndex = ordered.findIndex(x=>x.id === firstId);
+      }
+      let nextIndex;
+      if (currentIndex === -1) {
+        nextIndex = delta > 0 ? 0 : (ordered.length - 1);
+      } else {
+        nextIndex = (currentIndex + delta + ordered.length) % ordered.length;
+      }
+      selected.clear();
+      selected.add(ordered[nextIndex].id);
+      // auto-scroll view so the selected item is visible
+      const selectedPos = nextIndex; // zero-based in ordered
+      const selectedRow = Math.floor(selectedPos / COLS);
+      viewRowOffset = Math.max(0, selectedRow - Math.floor(ROWS/2));
+      render();
+    }
+
+    // Shift visible window by rows (delta = -1 previous row, +1 next row)
+    function shiftRows(delta) {
+      viewRowOffset = Math.max(0, viewRowOffset + delta);
+      render();
+    }
+
+    // Compute cell size so the 5x4 grid fits into the available grid-wrap area.
+    function adjustGrid() {
+      const grid = document.getElementById('grid');
+      if (!grid) return;
+      // reserve space for overlay controls so bottom row isn't hidden
+      const overlay = document.querySelector('.controls-overlay');
+      if (overlay) {
+        const rect = overlay.getBoundingClientRect();
+        // add a margin so overlay doesn't touch the last row (leave clear space)
+        const extra = 24;
+        grid.style.bottom = (rect.height + extra) + 'px';
+      } else {
+        grid.style.bottom = '16px';
+      }
+
+    // available size inside grid (account for padding)
+      const style = window.getComputedStyle(grid);
+      const padLeft = parseFloat(style.paddingLeft) || 0;
+      const padRight = parseFloat(style.paddingRight) || 0;
+      const padTop = parseFloat(style.paddingTop) || 0;
+      const padBottom = parseFloat(style.paddingBottom) || 0;
+      const gap = 8; // matches CSS gap
+      const cols = 4, rows = 5;
+      // clientWidth/Height reflect the updated bottom after setting overlay reserve
+      const availableWidth = grid.clientWidth - padLeft - padRight - (cols - 1) * gap;
+      const availableHeight = grid.clientHeight - padTop - padBottom - (rows - 1) * gap;
+      const cellW = Math.max(24, Math.floor(availableWidth / cols));
+      const cellH = Math.max(24, Math.floor(availableHeight / rows));
+      // write CSS variables for possible CSS use and size each cell directly
+      grid.style.setProperty('--cell-w', cellW + 'px');
+      grid.style.setProperty('--cell-h', cellH + 'px');
+      // apply to each cell: width, height and a proportional font-size (large, readable)
+      document.querySelectorAll('.cell').forEach(c => {
+        c.style.width = cellW + 'px';
+        c.style.height = cellH + 'px';
+        // make font quite large and proportional to the smaller dimension
+        c.style.fontSize = Math.floor(Math.min(cellW, cellH) * 0.62) + 'px';
+        c.style.borderRadius = Math.max(6, Math.floor(Math.min(cellW, cellH) * 0.06)) + 'px';
+      });
+      // update preview-mini text
+      const preview = document.getElementById('preview');
+      if (preview) {
+        const arr = Array.from(selected).map(id => {
+          const it = items.find(x => x.id === id);
+          return it ? it.queue_no : id;
+        });
+        preview.textContent = arr.join(', ');
+      }
+    }
+    document.getElementById('btnCall').onclick = async () => {
+      if (selected.size === 0) return alert('ยังไม่ได้เลือกหมายเลข');
+      const ids = Array.from(selected);
+      await fetch('/api/call', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids, called_by: 'caller1'})});
+      selected.clear();
+      await load();
+    };
+  document.getElementById('btnPrev').onclick = () => shiftRows(-1);
+  document.getElementById('btnNext').onclick = () => shiftRows(1);
+    document.getElementById('btnCancel').onclick = async () => {
+      if (selected.size === 0) return alert('ยังไม่ได้เลือกหมายเลข');
+      const ids = Array.from(selected);
+      await fetch('/api/cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})});
+      selected.clear();
+      await load();
+    };
+    document.getElementById('btnSkip').onclick = async () => {
+      if (selected.size === 0) return alert('ยังไม่ได้เลือกหมายเลข');
+      const ids = Array.from(selected);
+      await fetch('/api/skip', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})});
+      selected.clear();
+      await load();
+    };
+
+    load();
+    setInterval(load, 2000);
+    // ensure grid recalculates on resize/orientation change
+    window.addEventListener('resize', () => { adjustGrid(); });
+    window.addEventListener('orientationchange', () => { adjustGrid(); });
+  </script>
+</body>
+</html>
